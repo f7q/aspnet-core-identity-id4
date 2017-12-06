@@ -2,8 +2,8 @@
 ## Step by step guide
 
 In this guide we will learn to:
-- Use aspnet core 2.0 identity
-- Integrate IdentityServer4
+- Create an aspnet core 2.0 identity front end
+- Integrate this with IdentityServer4
 - Use a 'real' database (Postgres)
 - Use a secrets.json file to safely keep credentials out of source control
 - Implement 2FA with QR codes and a mobile authenticator app
@@ -14,7 +14,6 @@ In this guide we will learn to:
 Requires windows 10 or an environment that supports docker compose v2
 1. install dotnet core 2.0
 2. install docker for | platform |
-
 
 ### Creating the project
 1. 
@@ -28,6 +27,7 @@ cd c:\src\project\Business.Identity.Host
  dotnet new mvc --auth Individual 
  dotnet add package IdentityServer4.AspNetIdentity
  dotnet add package IdentityServer4.EntityFramework
+ dotnet add package Npgsql.EntityFrameworkCore.PostgreSQL
  dotnet restore
  dotnet build
 ```
@@ -39,18 +39,14 @@ services.AddIdentityServer().AddAspNetIdentity<ApplicationUser>();
 6. dotnet run to check your work compiles and runs
 
 ### Hooking up a 'real' database
-1. Using postgresql
-```
-dotnet add package Npgsql.EntityFrameworkCore.PostgreSQL
-```
-2. Edit Startup.cs to use postgres
+1. Edit Startup.cs to use postgres
 ```csharp
 var connectionString = Configuration["IdentityConnection"];
 services.AddDbContext<ApplicationDbContext>(
     options => options.UseNpgsql(connectionString)
 );
 ```
-3. Edit Startup.cs to use persistent stores in ID4
+2. Edit Startup.cs to use persistent stores in ID4
 ```csharp
 string migrationsAssembly = Assembly.GetExecutingAssembly().GetName().Name;
 services
@@ -70,30 +66,28 @@ services
     })
     .AddAspNetIdentity<ApplicationUser>();
 ```
-4. Ensure csproj file has the correct tooling to support user secrets
-- You'll need to add a property to the projects property group
+3. Ensure csproj file has the correct tooling to support user secrets
+- You'll need to ensure there is a property to the projects property group
 ```xml
 <PropertyGroup>
     <TargetFramework>netcoreapp2.0</TargetFramework>
-    <UserSecretsId>User-Secret-ID</UserSecretsId>
+    <UserSecretsId>Change-This-ID =)</UserSecretsId>
   </PropertyGroup>
 ```
-- Next add a reference to the secret manager tool
+- Next ensure there is a reference to the secret manager tool
 ```xml
  <DotNetCliToolReference Include="Microsoft.Extensions.SecretManager.Tools" Version="2.0.0" />
-```
-- Restore packages
-```cmd
-dotnet restore
 ```
 - You'll need to ensure you have a secrets file in the correct location
 #### Windows: %APPDATA%\microsoft\UserSecrets\{userSecretsId}\secrets.json
 #### Linux: ~/.microsoft/usersecrets/{userSecretsId}/secrets.json
 #### Mac: ~/.microsoft/usersecrets/{userSecretsId}/secrets.json
+
+Visual studio users can right clikc on the project, and select 'Manage user secrets' to create / edit this file.
 - Put your connection string in the secrets.json file:
 ```json
 {
-    "IdentityConnection": "User ID=identity_user;Password=identity_password;Host=localhost;Port=5433;Database=identity;Pooling=true;"
+    "IdentityConnection": "User ID=identity_user;Password=Ch@ng3 me =);Host=localhost;Port=5433;Database=identity;Pooling=true;"
 }
 ```
 - Ensure your Startup::ctor uses secrets in development
@@ -111,7 +105,11 @@ public Startup(IHostingEnvironment env)
     Configuration = builder.Build();
 }
 ```
-5. Create migrations for the identity server stores.
+4. Update your database with the aspnet identity tables
+```cmd
+dotnet ef database update --context ApplicationDbContext
+```
+5. Create migrations for the ID4 identity server stores.
 ```cmd
 dotnet ef migrations add initial-id4-persisted-grants --context PersistedGrantDbContext -o Data/Migrations/IdentityServer/PersistedGrantDb
 
@@ -119,6 +117,94 @@ dotnet ef migrations add initial-id4-server-config --context ConfigurationDbCont
 
 dotnet ef database update --context PersistedGrantDbContext
 dotnet ef database update --context ConfigurationDbContext
+```
+
+At this point you could run your app and add a user to check that everything on the aspnet identity side is operating as expected.
+
+### Data seeding
+This step is entirely optional but you might want to establish a base line of data - especially if you are just getting started and don't have time to make a configuration UI for all of these tables that ID4 and Microsoft just created for you!
+
+You can do this is in a variety of ways but this is an opportunity to demonstrate aspnet core's inbuilt DI framework: 
+
+```csharp
+    // In Startup::ConfigureServices, lets add an as yet uncreated class and interface for seeding
+    services.AddScoped<IDataSeed, DataSeed>();
+
+    //change the Startup::Configure's signature to look like this:
+    public void Configure(IApplicationBuilder app, IHostingEnvironment env, IDataSeed dataSeed) //notice the dataSeed parameter - this will be automatically injected
+
+    //You could now call 
+    dataSeed.Init(); 
+```
+Implementation of a dataseed for ID4 might look like this:
+```csharp
+public interface IDataSeed
+    {
+        void Init();
+    }
+
+    public class DataSeed : IDataSeed
+    {
+        readonly ConfigurationDbContext configCtx;
+        readonly ApplicationDbContext appCtx;
+
+        public DataSeed(ConfigurationDbContext configCtx, ApplicationDbContext appCtx)
+        {
+            this.appCtx = appCtx;
+            this.configCtx = configCtx;
+        }
+
+        public void Init()
+        {
+            if (!configCtx.Clients.Any()) CreateClients();
+
+            if (!configCtx.ApiResources.Any()) CreateApiResources();
+        }
+
+        private void CreateApiResources()
+        {
+            if (!configCtx.ApiResources.Any())
+            {
+                var gameApi = new ApiResource("game_api", "Game API");
+
+                configCtx.ApiResources.Add(gameApi.ToEntity());
+                configCtx.SaveChanges();
+            }
+        }
+
+        private void CreateClients()
+        {
+            var gameClient = new Client()
+            {
+                ClientId = "game_client",
+                AllowedGrantTypes = GrantTypes.ClientCredentials,
+                ClientSecrets =
+                {
+                    new Secret("Ch@ng3 me too!".Sha256())
+                },
+                AllowedScopes = { "game_api" }
+            };
+            var e = gameClient.ToEntity();
+            e.Id = 1;
+            configCtx.Clients.Add(e);
+            configCtx.SaveChanges();
+        }
+    }
+```
+What I've done here is setup a very basic client and API relationship - which demands that a 'GrantType' of 'ClientCredential' be used. This means that whenever the a client tried to access an API - it will need to provide some credentials.
+
+_Use this an opportunity to berate myself for checking in credentials into source control -- show people how we might inject the Configuration to access it from secrets.json instead_
+
+## Creating an API Resource
+```powershell
+cd ..
+mkdir Business.Game.API
+cd Business.Game.API
+dotnet new webapi
+# if you're using solution files...
+
+dotnet sln {path\to\your.sln} add .\Business.Game.API.csproj 
+
 ```
 
 
