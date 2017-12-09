@@ -35,6 +35,9 @@ cd c:\src\project\Business.Identity.Host
 ```csharp
 //after services.AddMvc();
 services.AddIdentityServer().AddAspNetIdentity<ApplicationUser>();
+
+//in Configure method - replace app.UseAuthentication with
+app.UseIdentityServer();
 ```
 6. dotnet run to check your work compiles and runs
 
@@ -207,4 +210,149 @@ dotnet sln {path\to\your.sln} add .\Business.Game.API.csproj
 
 ```
 
+Set this project up on localhost:5001 by adding a launchsettings.json file
 
+```json
+{
+  "profiles": {
+    "Business.Game.API": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      },
+      "applicationUrl": "http://localhost:5001/"
+    }
+  }
+}
+```
+
+Modify the values controller.
+
+```csharp
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using System.Linq;
+
+namespace X.Game.API.Controllers
+{
+    [Route("api/[controller]")]
+    [Authorize]
+    public class ValuesController : Controller
+    {
+        [HttpGet]
+        public IActionResult GetValues()
+        {
+            return Json(User.Claims.Select(c => new { c.Type, c.Value }));
+        }
+    }
+}
+```
+Bring in the ID4 dependency
+
+```cmd
+dotnet add package IdentityServer4.AccessTokenValidation
+```
+
+Configure our appsettings.development.json (and prod equiv)
+```json
+{
+  "Logging": {
+    "IncludeScopes": false,
+    "LogLevel": {
+      "Default": "Debug",
+      "System": "Information",
+      "Microsoft": "Information"
+    }
+  },
+  "Settings": {
+    "api_name": "game_api",
+    "authority": "http://localhost:5000"
+  }
+}
+```
+
+Setup our startup to use our identity server as an access token provider:
+
+```csharp
+public class Startup
+    {
+        IConfigurationRoot Configuration;
+
+        public Startup(IHostingEnvironment env)
+        {
+            var builder = new ConfigurationBuilder();
+            if(env.IsDevelopment())
+            {
+                builder.AddUserSecrets<Startup>();
+            } else
+            {
+                builder.AddEnvironmentVariables();
+            }
+
+            Configuration = builder.Build();
+        }
+
+        public void ConfigureServices(IServiceCollection services)
+        {
+            services.AddMvcCore()
+                .AddAuthorization()
+                .AddJsonFormatters();
+
+            services.AddAuthentication("Bearer")
+                .AddIdentityServerAuthentication(options =>
+                {
+                    options.Authority = Configuration["settings:authority"];
+                    options.RequireHttpsMetadata = false;
+
+                    options.ApiName = Configuration["settings:api_name"];
+                });
+        }
+
+        public void Configure(IApplicationBuilder app)
+        {
+            app.UseAuthentication();
+
+            app.UseMvc();
+        }
+    }
+```
+*NOTE* Because we've added the user secrets in here as an option - we need to update the csproj and add a UserSecretsId tag.
+
+### Simple API Consumer
+First, we'll explore the basic mechanics of requesting an access token
+
+```cmd
+mkdir ..\Business.Game.Client
+cd ..\Business.Game.Client
+dotnet new console
+dotnet add package IdentityModel
+```
+
+Program.cs
+```csharp
+static void Main(string[] args)
+        {
+            Console.WriteLine("Do you want to play a game?");
+            var answer = Console.ReadLine();
+            if (answer != "Yes") return;
+
+            var disco = DiscoveryClient.GetAsync("http://localhost:5000").Result;
+            if (disco.IsError)
+            {
+                Console.WriteLine(disco.Error);
+                return;
+            }
+
+            var tokenClient = new TokenClient(disco.TokenEndpoint, "game_client", "Ch@ng3 me too!");
+            var tokenResponse = tokenClient.RequestClientCredentialsAsync("game_api").Result;
+
+            if (tokenResponse.IsError)
+            {
+                Console.WriteLine(tokenResponse.Error);
+                return;
+            }
+
+            Console.WriteLine(tokenResponse.Json);
+        }
+```
