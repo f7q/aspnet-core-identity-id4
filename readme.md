@@ -27,13 +27,15 @@ cd c:\src\project\Business.Identity.Host
 2. Create some secrets that we can use in our configuration files. To keep these secrets out of source control you use a .gitignore for the .env file you'll create. This needs to be in the same directory as your docker-compose.yml
 
 _.env_
-```init
-PGADMIN_DEFAULT_EMAIL: your@email.com
-PGADMIN_DEFAULT_PASSWORD: p@ssw0rd!
-POSTGRES_USER: "identity_user"
-POSTGRES_PASSWORD: "identity_password"
-POSTGRES_DB: "identity"
+```bash
+PGADMIN_DEFAULT_EMAIL=your@email.com
+PGADMIN_DEFAULT_PASSWORD=p@ssw0rd!
+POSTGRES_USER=identity_user
+POSTGRES_PASSWORD=identity_password
+POSTGRES_DB=identity
 ```
+The syntax rules should be heeded when creating your .env file! https://docs.docker.com/compose/env-file/
+
 3. configure your development environment by creating a docker-compose.yml file:
 _docker-compose.yml_
 ```yml
