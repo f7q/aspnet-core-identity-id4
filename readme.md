@@ -24,7 +24,7 @@ mkdir c:\src\project
 mkdir c:\src\project\Business.Identity.Host
 cd c:\src\project\Business.Identity.Host
 ```
-2. Create some secrets that we can use in our configuration files. To keep these secrets out of source control you use a .gitignore for the .env file you'll create. This needs to be in the same directory as your docker-compose.yml
+2. Create some secrets that we can use in our configuration files. To keep these secrets out of source control you use a .gitignore for the .env file you'll create. 
 
 _.env_
 ```bash
@@ -34,60 +34,6 @@ POSTGRES_USER=identity_user
 POSTGRES_PASSWORD=identity_password
 POSTGRES_DB=identity
 ```
-The syntax rules should be heeded when creating your .env file! https://docs.docker.com/compose/env-file/
-
-3. configure your development environment by creating a docker-compose.yml file:
-_docker-compose.yml_
-```yml
-version: '3'
-services:
-  dbadmin:
-    image: dpage/pgadmin4
-    restart: always
-    env_file: .env.example
-    ports: 
-    - "5555:80"
-  identity_db:
-    image: postgres:alpine
-    restart: always
-    env_file: .env.example
-    ports:
-    - "5432:5432"
-```
-
-This creates a couple of containers, one for a web application listening on 5555 to manage your database and run queries, the other is a postgres database listening on 5432.
-
-4. Up your development stack
-```powershell
-#in the same directory as docker-compose.yml
-#run in background
-docker-compose up -d 
-# OR run in foreground
-# docker-compose up 
-```
-
-You can now check if everything is running by going to http://localhost:5555 and logging into pgadmin with the credentials you setup.
-
-To determine what IP address pgadmin should connect on, you could use the following to inspect the db container for it's internal IP address:
-```powershell
-docker ps
-#output
-CONTAINER ID        IMAGE               COMMAND                  CREATED             STATUS              PORTS                           NAMES
-2ecf91e552e6        dpage/pgadmin4      "/bin/bash /entry.sh"    3 minutes ago       Up 3 minutes        443/tcp, 0.0.0.0:5555->80/tcp   id4aspnetcore_dbadmin_1
-217a2da8a303        postgres:alpine     "docker-entrypoint..."   3 minutes ago       Up 3 minutes        0.0.0.0:5432->5432/tcp          id4aspnetcore_identity_db_1
-#end output
-docker exec -it 217a2da8a303 /sbin/ifconfig eth0 #each OS is different here
-
-#output
-eth0      Link encap:Ethernet  HWaddr 02:42:AC:15:00:02
-          inet addr:172.21.0.2  Bcast:0.0.0.0  Mask:255.255.0.0
-          UP BROADCAST RUNNING MULTICAST  MTU:1500  Metric:1
-          RX packets:44 errors:0 dropped:0 overruns:0 frame:0
-          TX packets:0 errors:0 dropped:0 overruns:0 carrier:0
-          collisions:0 txqueuelen:0
-          RX bytes:2536 (2.4 KiB)  TX bytes:0 (0.0 B)
-```
-This shows us we can determine that the IP Address is 172.21.0.2 so to connect pgadmin to our db - we use: 172.21.0.2 port 5432 (refer to pgadmin documentation to help with this)
 
 ### Create our identity server application
 
@@ -107,9 +53,28 @@ services.AddIdentityServer().AddAspNetIdentity<ApplicationUser>();
 
 //in Configure method - replace app.UseAuthentication with
 app.UseIdentityServer();
+
+//add Configure method
+string migrationsAssembly = Assembly.GetExecutingAssembly().GetName().Name;
+services.AddDbContext<PersistedGrantDbContext>(
+    options => options.UseSqlite(connectionString), b => b.MigrationsAssembly(migrationsAssembly));
+);
+services.AddDbContext<ConfigurationDbContext>(
+    options => options.UseSqlite(connectionString), b => b.MigrationsAssembly(migrationsAssembly));
+);
 ```
 3. dotnet run to check your work compiles and runs
+4. Update your database with the aspnet identity tables
+```cmd
+dotnet ef migrations add initial-id4-identity --context ApplicationDbContext
+dotnet ef migrations add initial-id4-persisted-grants --context PersistedGrantDbContext -o Data/Migrations/IdentityServer/PersistedGrantDb
 
+dotnet ef migrations add initial-id4-server-config --context ConfigurationDbContext -o Data/Migrations/IdentityServer/ConfigurationDb
+
+dotnet ef database update --context ApplicationDbContext
+dotnet ef database update --context PersistedGrantDbContext
+dotnet ef database update --context ConfigurationDbContext
+```
 ### Hooking up our 'real' database
 
 1. Edit Startup.cs to use postgres
@@ -152,7 +117,7 @@ services
  <DotNetCliToolReference Include="Microsoft.Extensions.SecretManager.Tools" Version="2.0.0" />
 ```
 - You'll need to ensure you have a secrets file in the correct location
-#### Windows: %APPDATA%\microsoft\UserSecrets\{userSecretsId}\secrets.json
+#### Windows: %APPDATA%\microsoft\UserSecrets\\{userSecretsId}\secrets.json
 #### Linux: ~/.microsoft/usersecrets/{userSecretsId}/secrets.json
 #### Mac: ~/.microsoft/usersecrets/{userSecretsId}/secrets.json
 
